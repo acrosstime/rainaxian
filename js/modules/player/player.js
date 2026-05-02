@@ -372,16 +372,23 @@ export class Player {
         // Update powerups
         this.updatePowerups();
 
-        // Mouse aiming
-        const dx = input.aimX - this.x;
-        const dy = input.aimY - this.y;
-        this.angle = Math.atan2(dy, dx);
+        // Galaxian: ship locked facing straight up; bullets fly vertical.
+        // Free-flight legacy mode keeps mouse aim.
+        const ge = this.gameEngine || (typeof window !== 'undefined' ? window.gameEngine : null);
+        if (ge && ge.galagaMode) {
+            this.angle = -Math.PI / 2;
+        } else {
+            const dx = input.aimX - this.x;
+            const dy = input.aimY - this.y;
+            this.angle = Math.atan2(dy, dx);
+        }
         
         // Debug player aiming occasionally
         if (Math.random() < 0.01) { // 1% chance
         }
 
-        this.isMoving = input.up || input.down || input.left || input.right;
+        this.isMoving = input.up || input.down || input.left || input.right ||
+            (input.touchActive && (Math.abs(input.touchVecX) + Math.abs(input.touchVecY)) > 0.05);
 
         // ── Thrust juice: ramp thrustLevel and detect startup ──
         const now = Date.now();
@@ -402,17 +409,24 @@ export class Player {
             this.engineStartup = Math.max(0, this.engineStartup - 0.06); // ~17 frames ≈ 0.28s
         }
 
-        // WASD movement with tight controls
+        // WASD movement with tight controls (touch press-drag overrides
+        // when active — uses analog magnitude from input.touchVecX/Y).
         if (this.isMoving && !this.thrustersDisabled) {
             let moveX = 0, moveY = 0;
-            if (input.left) moveX -= 1;
-            if (input.right) moveX += 1;
-            if (input.up) moveY -= 1;
-            if (input.down) moveY += 1;
+            if (input.touchActive && (Math.abs(input.touchVecX) + Math.abs(input.touchVecY)) > 0.05) {
+                moveX = input.touchVecX;
+                moveY = input.touchVecY;
+            } else {
+                if (input.left) moveX -= 1;
+                if (input.right) moveX += 1;
+                if (input.up) moveY -= 1;
+                if (input.down) moveY += 1;
+            }
 
+            const mag = Math.min(1, Math.hypot(moveX, moveY));
             const moveAngle = Math.atan2(moveY, moveX);
             const speedMultiplier = this.getMovementSpeedMultiplier();
-            const thrustForce = this.thrustPower * speedMultiplier;
+            const thrustForce = this.thrustPower * speedMultiplier * mag;
             this.vel.x += Math.cos(moveAngle) * thrustForce;
             this.vel.y += Math.sin(moveAngle) * thrustForce;
 
@@ -488,19 +502,28 @@ export class Player {
         
         // Boundary bouncing instead of wrapping
         if (gameField) {
+            // Galaxian mode: player is locked to the lower half. The
+            // upper bound becomes height/2 instead of 0; vel.y is zeroed
+            // (not bounced) to prevent jitter at the seam.
+            const ge = (typeof window !== 'undefined') ? window.gameEngine : null;
+            const galaxian = ge && ge.galagaMode;
+            const minY = galaxian
+                ? gameField.height / 2 + this.radius
+                : this.radius;
+
             // Bounce off left/right boundaries
             if (this.x - this.radius < 0) {
                 this.x = this.radius;
-                this.vel.x = Math.abs(this.vel.x) * 0.8; // Bounce with some energy loss
+                this.vel.x = Math.abs(this.vel.x) * 0.8;
             } else if (this.x + this.radius > gameField.width) {
                 this.x = gameField.width - this.radius;
                 this.vel.x = -Math.abs(this.vel.x) * 0.8;
             }
-            
-            // Bounce off top/bottom boundaries
-            if (this.y - this.radius < 0) {
-                this.y = this.radius;
-                this.vel.y = Math.abs(this.vel.y) * 0.8;
+
+            // Top clamp (lower-half lock in galaxian mode)
+            if (this.y < minY) {
+                this.y = minY;
+                if (this.vel.y < 0) this.vel.y = 0;
             } else if (this.y + this.radius > gameField.height) {
                 this.y = gameField.height - this.radius;
                 this.vel.y = -Math.abs(this.vel.y) * 0.8;
